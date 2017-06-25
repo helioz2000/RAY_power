@@ -69,9 +69,6 @@ void power_save()
 {
   /* Enter power saving mode. SLEEP_MODE_IDLE is the least saving
    * mode, but it's the only one that will keep the UART running.
-   * In addition, we need timer0 to keep track of time, timer 1
-   * to drive the buzzer and timer2 to keep pwm output at its rest
-   * voltage.
    */
 
   set_sleep_mode(SLEEP_MODE_IDLE);
@@ -79,7 +76,10 @@ void power_save()
   power_adc_disable();
   power_spi_disable();
   power_twi_disable();
-
+  power_timer0_disable();
+  power_timer1_disable();
+  power_timer2_disable();
+  
   digitalWrite(LED_PIN, LOW);
   sleep_mode();    // Go to sleep
   digitalWrite(LED_PIN, HIGH);

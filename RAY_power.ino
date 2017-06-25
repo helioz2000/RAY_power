@@ -2,27 +2,17 @@
  *  Battery monitor and power controller for VK2RAY repeater
  *  V1.0 Battery Voltage Monitor and Power Cut function when battery gets too low
  *       LCD display (if connected) will display
+ *       
+ *  V2.0 Serial Connection with control function added, LCD removed
  * 
- * 
- * Serial debugging:
- * =================
- * 
- * The serial console output is switched off at the start.
- * console output can be enabled by sending one character (any character > 20h)
+ * Serial terminal operation:
+ * ==========================
+ * The serial console output is switched is started by CR+CR+CR
+ * The serial port will close after inactivity timeout
  * 
  */
 
-
-#define USE_LCD
-
-#ifdef USE_LCD
-  #include <LCD.h>
-  #include "LCD2004A.h"
-  static LCD2004A lcd;
-#endif
-
 #include "power.h"
-
 
 #define POWER_ON_PIN 3  // pin to enable power
 #define LED_RED_PIN 4   // LED to indicate shutdown battery
@@ -32,7 +22,7 @@
 #define ANALOG_REFERENCE_V 5.0     //Reference for Analog, Voltage at full scale
 #define ANALOG_REFERENCE_RAW (float)1023 // 10bit AD converter
 
-#define PRESCALE_V1 4.0
+#define PRESCALE_A0 4.0
 #define PRESCALE_V2 4.0
 
 #define LOOPTIME 1    // seconds
@@ -43,22 +33,18 @@
 
 #define V_CUT_DELAY 10    // seconds of voltage <= V_CUT
 #define V_ON_DELAY 300    // seconds of voltage >= V_ON
-#define MIN_OFF_TIME 20 //900  // seconds = 15 minutes 
+#define MIN_OFF_TIME 20   //900  // seconds = 15 minutes 
 
 static uint32_t v_cut_timer = 0, off_timer = 0, v_on_timer = 0;
+static uint32_t sleep_until;
 static bool system_power = true;
 static bool serialDebug = false;
 static bool cycleFlash;
-static float v1, v2, v3, scaleFactor;
-static int raw1, raw2, raw3;
-static uint32_t sleep_until;
+static float batteryV;
+static float scaleFactor = ANALOG_REFERENCE_V / ANALOG_REFERENCE_RAW;
 
 void setup() {
   delay(3000);  // over comes auto reset at startup
-  // put your setup code here, to run once:
-#ifdef USE_LCD
-  lcd.setup();
-#endif
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(POWER_ON_PIN, OUTPUT);
   pinMode(LED_RED_PIN, OUTPUT);
@@ -70,35 +56,15 @@ void setup() {
   sleep_until = millis() + (LOOPTIME * 1000);
 }
 
+
 void loop() {
-  
-  raw1 = analogRead(A0);
-  raw2 = analogRead(A1);
-  raw3 = analogRead(A2);
-
-  scaleFactor = ANALOG_REFERENCE_V / ANALOG_REFERENCE_RAW;
-
-  // read raw and convert to voltage at AI
-  v1 = (float)raw1 * scaleFactor;
-  v2 = (float)raw2 * scaleFactor;
-  v3 = (float)raw3 * scaleFactor;
-#ifdef USE_LCD
-  lcd.printVoltages(2, v1, v2, v3);
-#endif
-  // Use pre-scale to calculate measured voltages
-  v1 = v1 * PRESCALE_V1;    
-  v2 = v2 * PRESCALE_V2;
-
-#ifdef USE_LCD
-  lcd.printVoltages(1, v1, v2, v3);
-  lcd.printRaw(3, raw1, raw2, raw3);
-#endif
+  readVoltages();
 
   cycleFlash = !cycleFlash;    // flash
   
   // Low voltage cutout logic
-  if (v1 < V_CUT) {
-    if (v1 < V_CUT_NOW)             // immediate cutout
+  if (batteryV < V_CUT) {
+    if (batteryV < V_CUT_NOW)             // immediate cutout
       v_cut_timer = V_CUT_DELAY;    // eliminate and further delay 
     if (v_cut_timer >= V_CUT_DELAY) {
       system_power = false;
@@ -110,7 +76,7 @@ void loop() {
   }
 
   // Power restore logic
-  if ( (v1 >= V_ON) && !system_power ) {
+  if ( (batteryV >= V_ON) && !system_power ) {
     if ( (v_on_timer > V_ON_DELAY) && (off_timer > MIN_OFF_TIME) ) {   // only if we had the minimum off time
       system_power = true;
       off_timer = 0;
@@ -136,13 +102,13 @@ void loop() {
   }
 
   // reset the on time
-  if (v1 < V_ON) 
+  if (batteryV < V_ON) 
     v_on_timer = 0;
 
   // Debug output
   if (serialDebug) {
     Serial.print("v1: ");
-    Serial.print(v1);
+    Serial.print(batteryV);
     Serial.print("  v_cut_timer: ");
     Serial.print(v_cut_timer);
     Serial.print("  v_on_timer: "); 
@@ -169,3 +135,14 @@ void loop() {
   // calculate next sleep time
   sleep_until = millis() + (LOOPTIME * 1000);
 }
+
+void readVoltages () {
+  // Batter Voltage
+  // read raw and convert to voltage at AI pin
+  float pinV = (float)analogRead(A0) * scaleFactor;
+  // Use pre-scale to calculate measured voltages (i.e. voltage divider)
+  batteryV = pinV * PRESCALE_A0;
+
+
+}
+
