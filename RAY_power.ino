@@ -7,50 +7,60 @@
  * 
  * Serial terminal operation:
  * ==========================
- * The serial console output is switched is started by CR+CR+CR
- * The serial port will close after inactivity timeout
+ * The serial console output is started by CR or LF from the terminal
+ * The serial console will close after inactivity timeout
+ * Only one serial terminal is available at any time
  * 
  */
 
 /*
  * External wiring:
  * A0 - connected to battery voltage, 8.2k/2.2k Voltage divider, Bat 15.6V = 3.3V on A0
+ * 4  - relay for power circuit 6
+ * .
+ * .
+ * 9  - relay fpr power circuit 1
+ * 
+ * Serial (pin 1 & 2) connected to LoRaWan remote access
+ * Serial (pin 2 & 3) connected to Rapsberry Pi 
+ * 
  */
 
 #include "power.h"
 #include "debug.h"
 #include <SoftwareSerial.h>
 
-#define DEVICE_COUNT 4
+#define DEVICE_COUNT 6  // Total number of power devices
+
+#define VERSION_MAJOR 1
+#define VERSION_MINOR 0
+
+enum pwrStateType {
+  sOff,
+  sOffDelay,
+  sOn,
+  sOnDelay
+};
 
 typedef struct {
   char description[20];
   byte pin;
   float offVoltage;
   float onVoltage;
-  uint16_t onDelay;
-  uint16_t offDelay;
-  unsigned long t1;
-  unsigned long t2;
+  uint16_t onDelay;     // seconds required above onVoltage before switching On
+  uint16_t offDelay;    // seconds below offVoltage before switching off
+  byte currentState;
+  unsigned long offTime;
+  unsigned long onTime;
 } device_item;
 
 device_item pwr_device[DEVICE_COUNT] = {
-  {"Relay 1", 6, 11.0, 12.0, 180, 10, 0, 0},
-  {"Relay 2", 7, 11.5, 13.0, 600, 10, 0, 0},
-  {"Relay 3", 8, 11.5, 13.0, 600, 10, 0, 0}, 
-  {"Relay 4", 9, 11.5, 13.0, 600, 10, 0, 0}
-};
-
-enum baudrate_t {
-  b300,
-  b600,
-  b1200,
-  b2400,
-  b4800,
-  b9600,
-  b19200,
-  b38400,
-  b56800
+  {"Relay 1", 9, 10.5, 11.0, 180, 10, sOn, 0, 0},
+  {"Relay 2", 8, 11.5, 13.0, 300, 10, sOn, 0, 0},
+  {"Relay 3", 7, 11.5, 13.0, 300, 10, sOn, 0, 0}, 
+  {"Relay 4", 6, 11.5, 13.0, 300, 10, sOn, 0, 0},
+  {"Relay 5", 5, 11.5, 13.0, 300, 10, sOn, 0, 0},
+  {"Relay 6", 4, 11.5, 13.0, 300, 10, sOn, 0, 0}
 };
 
 #define PWR_ON true     // Output state for device ON
@@ -66,26 +76,11 @@ enum baudrate_t {
 SoftwareSerial tty1(T1_RX_PIN, T1_TX_PIN); // RX, TX
 
 #define LED LED_BUILTIN
-#define POWER_ON_PIN 3  // pin to enable power
-#define LED_RED_PIN 4   // LED to indicate shutdown battery
-#define LED_GREEN_PIN 5 // LED to indicate power ON
-#define BUTTON_PIN 2    // Button, switched to GND, internal pullup required
 
 #define ANALOG_REFERENCE_V 3.3     //Reference for Analog, Voltage at full scale
 #define ANALOG_REFERENCE_RAW (float)1023 // 10bit AD converter
 
 #define PRESCALE_A0 4.7273        //15.6V -> 3.3V
-//#define PRESCALE_V2 4.0
-
-#define LOOPTIME 1    // seconds
-
-#define V_CUT 11.5      // [V] cut power after delay
-#define V_CUT_NOW 10.0  // [V] cut power immediately
-#define V_ON  13.0      // [V] switch back on after delay
-
-#define V_CUT_DELAY 10    // seconds of voltage <= V_CUT
-#define V_ON_DELAY 300    // seconds of voltage >= V_ON
-#define MIN_OFF_TIME 20   //900  // seconds = 15 minutes 
 
 static bool tty0_connected = false;
 static bool tty1_connected = false;
@@ -93,10 +88,12 @@ static bool tty1_connected = false;
 unsigned long tty0_disconnect_time;
 unsigned long tty1_disconnect_time;
 
-#define TERMINAL_TIMEOUT 10000;
+#define TERMINAL_TIMEOUT 180    // seconds
 
 #define RX_BUF_SIZE 8
 byte rxBuffer[RX_BUF_SIZE];
+
+bool overrideMode=false;    // manual control of power circuits via terminal
 
 static float batteryV;
 static float scaleFactor = ANALOG_REFERENCE_V / ANALOG_REFERENCE_RAW;
@@ -108,12 +105,13 @@ void setup() {
   pinMode(LED, OUTPUT);
   digitalWrite(LED, LOW);
 
-  // configure pwr device outputs and switch them off 
+  // configure pwr device outputs and switch them the pre-set state
   for (int i=0; i < DEVICE_COUNT; i++) {
     pinMode(pwr_device[i].pin, OUTPUT);
-    devicePwr(i, PWR_OFF);
+    devicePwr(i+1, pwr_device[i].currentState);
   }
-  
+
+  // Start terminal interfaces
   tty0.begin(TERMINAL_BAUD);
   tty0.println("Started tt0");
   tty1.begin(TERMINAL_BAUD);
@@ -123,100 +121,94 @@ void setup() {
 void loop() {
   readVoltages();
   terminal_loop();
-/*
-  debugTTY.print("A0 = ");
-  debugTTY.print(batteryV);
-  debugTTY.println("V");
-  delay(1000);
-  */
-/*
-  cycleFlash = !cycleFlash;    // flash
-  
-  // Low voltage cutout logic
-  if (batteryV < V_CUT) {
-    if (batteryV < V_CUT_NOW)             // immediate cutout
-      v_cut_timer = V_CUT_DELAY;    // eliminate and further delay 
-    if (v_cut_timer >= V_CUT_DELAY) {
-      system_power = false;
-    } else {
-      v_cut_timer += LOOPTIME;
-    }    
-  } else {
-    v_cut_timer = 0;
+  if (!overrideMode) {
+    processDevices();
   }
+}
 
-  // Power restore logic
-  if ( (batteryV >= V_ON) && !system_power ) {
-    if ( (v_on_timer > V_ON_DELAY) && (off_timer > MIN_OFF_TIME) ) {   // only if we had the minimum off time
-      system_power = true;
-      off_timer = 0;
-    } else {      
-      v_on_timer += LOOPTIME;
-    }
-  }
-
-  // Button - overrides the power relay to off state
-  if (!digitalRead(BUTTON_PIN))   // button pressed?
-    system_power = false;
-
-  // Drive indicators and power relay
-  if (!system_power) {
-    off_timer += LOOPTIME;              // timer to measure off time
-    digitalWrite(POWER_ON_PIN, LOW);    // Power cutout relay
-    digitalWrite(LED_GREEN_PIN, LOW);   // Set LED indicators
-    digitalWrite(LED_RED_PIN, cycleFlash);  // flashing
-  } else {
-    digitalWrite(POWER_ON_PIN, HIGH);   // Power cutout relay
-    digitalWrite(LED_GREEN_PIN, HIGH);  // Set LED indicators
-    digitalWrite(LED_RED_PIN, LOW);
-  }
-
-  // reset the on time
-  if (batteryV < V_ON) 
-    v_on_timer = 0;
-
-  // Debug output
-  if (serialDebug) {
-    Serial.print("v1: ");
-    Serial.print(batteryV);
-    Serial.print("  v_cut_timer: ");
-    Serial.print(v_cut_timer);
-    Serial.print("  v_on_timer: "); 
-    Serial.print(v_on_timer);
-    Serial.print("  off_timer: ");
-    Serial.print(off_timer);
-    Serial.print("  Button: ");
-    Serial.print(digitalRead(BUTTON_PIN));
-    if (system_power)
-      Serial.println(" - Power is ON");
-    else
-      Serial.println(" - Power is OFF");
-  }     
-
-  // Power saving sleep cycle
-  while ((int32_t) (millis() < sleep_until) ) {
-      power_save();
-      // check for console input
-      if (Serial.available()) {
-        if (Serial.read() > ' ')      // ignore control chars such as CR and LF
-          serialDebug = !serialDebug; // toggle debug output
+void processDevices () {
+  for (int i=0; i<DEVICE_COUNT; i++) {   
+     
+    // is the device ON?
+    if (pwr_device[i].currentState == sOn) {
+      // is battery voltage above cutout?
+      if (batteryV > pwr_device[i].offVoltage) {
+        continue; // nothing to do, process next device
+      } else {  // battery voltage is below cutout?
+        // start the off delay
+        pwr_device[i].currentState = sOffDelay;
+        pwr_device[i].offTime = millis() + ((unsigned long)pwr_device[i].offDelay * (unsigned long)1000);
       }
-    } 
-  // calculate next sleep time
-  sleep_until = millis() + (LOOPTIME * 1000);
-  */
+    }
+
+    // is the device OFF?
+    if (pwr_device[i].currentState == sOff) {
+      // is battery below on voltage?
+      if (batteryV < pwr_device[i].onVoltage) {
+        continue; // nothing to do, process next device
+      } else {  // battery is above ON voltage
+        // start to on delay
+        pwr_device[i].currentState = sOnDelay;
+        pwr_device[i].onTime = millis() + ((unsigned long)pwr_device[i].onDelay * (unsigned long)1000);
+      }
+    }
+
+    // is the device in OFF delay mode?
+    if (pwr_device[i].currentState == sOffDelay) {
+      // has the voltage risen back up?
+      if (batteryV > pwr_device[i].offVoltage) {
+        // return back to ON status
+        pwr_device[i].currentState = sOn;
+      } else {  //voltage is still below cutout
+        // has the off delay expired?
+        if (millis() >= pwr_device[i].offTime) {
+          devicePwr(i+1, sOff);    // switch power off
+        }
+      }
+    }
+
+    // is the device in ON delay mode?
+    if (pwr_device[i].currentState == sOnDelay) {
+      // has the voltage dropped back down?
+      if (batteryV < pwr_device[i].onVoltage) {
+        // return back to OFF state
+        pwr_device[i].currentState = sOff;
+      } else {    // battery is above on voltage
+        if (millis() >= pwr_device[i].onTime) {
+          devicePwr(i+1, sOn);    // switch power on
+        }
+      }
+    }
+    
+  } // for loop - device
 }
 
 void readVoltages () {
   // Batter Voltage
-  // read raw and convert to voltage at AI pin
+  // read raw and convert to voltage at AI pin voltage
   float pinV = (float)analogRead(A0) * scaleFactor;
   // Use pre-scale to calculate measured voltages (i.e. voltage divider)
   batteryV = pinV * PRESCALE_A0;
 }
 
-void devicePwr(byte device, bool newState) {
-  digitalWrite(pwr_device[device].pin, newState);
+void devicePwr(byte device, byte newPwrState) {
+  // we can only process ON or OFF
+  if ( (newPwrState != sOn) && (newPwrState != sOff) ) {
+    return;
+  }
+  // index is 0 base, parameter device is 1 based
+  device--; 
+  // assign new power state to device
+  pwr_device[device].currentState = newPwrState;
+  // switch ON or OFF
+  if (newPwrState == sOn) {
+    digitalWrite(pwr_device[device].pin, PWR_ON);
+    terminal_print("%s ON\n\r", pwr_device[device].description);
+  }
+  if (newPwrState == sOff) {
+    digitalWrite(pwr_device[device].pin, PWR_OFF);
+    terminal_print("%s OFF\n\r", pwr_device[device].description);
+  }
 }
 
 /*
@@ -246,22 +238,107 @@ void debug(debugLevels level, char *sFmt, ...)  // %f is not supported
  * ===============================================================
  */
 
-void terminal_menu() {
-  terminal_print("\nPower Management Menu\n");
-  terminal_print("  v - battery voltage\n");
-  terminal_print("  x - exit (close connection)\n");
-  terminal_print("\nEnter command:\n");
+void terminal_print_state(byte device) {
+  switch (pwr_device[device].currentState) {
+    case sOn:
+      terminal_print("On");
+      break;
+    case sOff:
+      terminal_print("Off");
+      break;
+    case sOnDelay:
+      terminal_print("On Delay");
+      break;
+    case sOffDelay:
+      terminal_print("Off Delay");
+      break;
+    default:
+      terminal_print("Undefined");
+      break;
+  }
 }
 
-void terminal_process_cmd(byte rx_char) {
-  switch(rx_char) {
+void terminal_status() {
+  terminal_print("\n\rDevice Status:\n\r");
+  for (int i=0; i < DEVICE_COUNT; i++) {
+    terminal_print(pwr_device[i].description);
+    terminal_print(" is ");
+    terminal_print_state(i);
+    terminal_print("\n\r");
+  }
+  terminal_print("\n\r");
+}
+
+void terminal_voltage() {
+  terminal_print("\n\r============================\n\r");
+  terminal_print("Battery Voltage: %d.%dV\n\r", (int) batteryV, (int) (batteryV *100) % 100);  
+}
+
+void terminal_menu() {
+  terminal_print("\n\rPower Management V%d.%d\n\r", VERSION_MAJOR, VERSION_MINOR);
+  if (overrideMode) {
+    terminal_print("!!! --- Override Mode Active - Battery Monitor inactive --- !!!\n\r");
+  }
+  terminal_print("\n\r  fx - power off, x=1..%d (device number)\n\r", DEVICE_COUNT);
+  terminal_print("  nx - switch on, x=1..%d (device number)\n\r", DEVICE_COUNT);
+  if (overrideMode) {
+    terminal_print("  o -  toggle override mode - NOW ACTIVE !\n\r");
+  } else {
+    terminal_print("  o -  toggle override mode (manual power control)\n\r");
+  }
+  terminal_print("  s  - status\n\r");
+  terminal_print("  v  - battery voltage\n\r");
+  terminal_print("  x  - exit (close connection)\n\r");
+  if (overrideMode) {
+    terminal_print("\n\r!!! --- Override Mode Active - Battery Monitor inactive --- !!!\n\r");
+  }
+  terminal_print("\n\rEnter command:\n\r");
+}
+
+void terminal_invalid() {
+  terminal_print("\n\rInvalid Command\n\r");
+}
+
+byte terminal_verify_device(byte asciiDevNum, bool printInvalid) {
+  // returns the device number (1..DEVICE_COUNT) or 0 if device was invalid
+  // returns 0 for an invalid device
+  // check if device number is in range
+  if ( (asciiDevNum > ('0'+DEVICE_COUNT)) || (asciiDevNum < '1') ) {
+    if (printInvalid) {
+      terminal_print("\n\rInvalid device number %c (range is 1 to %d)\n\r", asciiDevNum, DEVICE_COUNT);
+    }
+    return (0);
+  }
+  return (asciiDevNum - 48);
+}
+
+void terminal_process_cmd(byte cmd, byte parameter) {
+  byte devNum;
+  switch(cmd) {
+    case 'f':
+      devNum = terminal_verify_device(parameter, true) ;
+      if (devNum)
+        devicePwr(devNum, sOff);
+      break;
+    case 'n':
+      devNum = terminal_verify_device(parameter, true) ;
+      if (devNum)
+        devicePwr(devNum, sOn);
+      break;
+    case 'o':
+      overrideMode = !overrideMode;
+      break;
+    case 's':
+      terminal_voltage();
+      terminal_status();
+      break;
     case 'v':
-      terminal_print("\n=================================\n");
-      terminal_print("Battery Voltage: %d.%dV\n", (int) batteryV, (int) (batteryV *100) % 100);
+      terminal_voltage();
       break;
     case 'x':
       terminal_disconnect();
     default:
+      terminal_invalid();
       break;
   }
   terminal_menu();
@@ -274,7 +351,7 @@ int terminal0_rx() {
     rxBuffer[i] = 0;
   }
   i = 0;
-  unsigned long timeout = millis() + 150;
+  unsigned long timeout = millis() + 250;   // critial for terminals which send one character at a time
   while (millis() <= timeout) {
     if (tty0.available()) {
       rxBuffer[i++] = tty0.read();
@@ -284,6 +361,7 @@ int terminal0_rx() {
 }
 
 int terminal1_rx() {
+  // receive from uart until timeout
   int i;
   // clear RX buffer
   for (i=0; i<RX_BUF_SIZE; i++) {
@@ -293,7 +371,8 @@ int terminal1_rx() {
   unsigned long timeout = millis() + 200;
   while (millis() <= timeout) {
     if (tty1.available()) {
-      rxBuffer[i] = tty1.read();      
+      rxBuffer[i++] = tty1.read();
+      if (i >= RX_BUF_SIZE) i--;  // prevent buffer overrun      
     }
   }
   return i;
@@ -301,11 +380,11 @@ int terminal1_rx() {
 
 void terminal_disconnect() {
   if (tty0_connected) {
-    terminal_print("timeout ... tty0 disconnected\n");
+    terminal_print("tty0 disconnected\n\r");
     tty0_connected = false;
   }
   if (tty1_connected) {
-    terminal_print("timeout ... tty1 disconnected\n");
+    terminal_print("tty1 disconnected\n\r");
     tty1_connected = false;
   }
 }
@@ -329,40 +408,54 @@ void terminal_print(char *sFmt, ...) {
 
 void terminal_loop () {
   byte rx_char;
-  
+
+  // tty0
   if (tty0.available()) {
     terminal0_rx();
     if (tty0_connected) {
-      terminal_process_cmd(rxBuffer[0]);
+      terminal_process_cmd(rxBuffer[0],rxBuffer[1]);
     } else {  // not connected
       if ( (rxBuffer[0] == 0x0A) || (rxBuffer[0] == 0x0D) ){
-        tty0_connected = true;
-        terminal_print("\nVK2RAY\nconnected tty0");
-        terminal_menu();
+        if (tty1_connected) {
+          tty0.print("\n\rtty1 is busy - unable to connect on tty0\n\r");
+          terminal_print("\nlogin attempt on tty0\n");
+        } else {
+          tty0_connected = true;
+          terminal_print("\n\rVK2RAY\n\rconnected tty0, timeout %ds\n\r", TERMINAL_TIMEOUT);
+          terminal_menu();
+        }
       }      
     }
-    tty0_disconnect_time = millis() + TERMINAL_TIMEOUT;
+    tty0_disconnect_time = millis() + ((unsigned long) TERMINAL_TIMEOUT * (unsigned long) 1000);
   }
-  
+
+  // tty1
   if (tty1.available()) {
     terminal1_rx();
     if (tty1_connected) {
-      terminal_process_cmd(rxBuffer[0]);
+      terminal_process_cmd(rxBuffer[0],rxBuffer[1]);
     } else {  // not connected
       if ( (rxBuffer[0] == 0x0A) || (rxBuffer[0] == 0x0D) ) {
-        tty1_connected = true;
-        terminal_print("\nVK2RAY\nconnected tty1\n");
-        terminal_menu();
+        if (tty0_connected) {
+          tty0.print("\n\rtty0 is busy - unable to connect on tty1\n\r");
+          terminal_print("\n\rlogin attempt on tty1\n\r");
+        } else {
+          tty1_connected = true;
+          terminal_print("\n\rVK2RAY\n\rconnected tty1, timeout %ds\n\r", TERMINAL_TIMEOUT);
+          terminal_menu();
+        }
       }
     }
-    tty1_disconnect_time = millis() + TERMINAL_TIMEOUT;
+    tty1_disconnect_time = millis() + ((unsigned long) TERMINAL_TIMEOUT * (unsigned long) 1000);
   }
 
   // check timeout
   if ( (tty0_connected) && (millis() > tty0_disconnect_time) ) {
+    terminal_print("\ntimeout ..... ");
     terminal_disconnect();
   }
   if ( (tty1_connected) && (millis() > tty1_disconnect_time) ) {
+    terminal_print("\ntimeout ..... ");
     terminal_disconnect();
   }
 }
