@@ -10,7 +10,8 @@
  * The serial console output is started by CR or LF from the terminal
  * The serial console will close after inactivity timeout
  * Only one serial terminal is available at any time
- * 
+ * tty0 requires login password (insecure connection)
+ * tty1 can also operate in non-human mode with STX/ETX enclosed commands
  */
 
 /*
@@ -21,8 +22,8 @@
  * .
  * 9  - relay fpr power circuit 1
  * 
- * Serial (pin 1 & 2) connected to LoRaWan remote access
- * Serial (pin 2 & 3) connected to Rapsberry Pi 
+ * Serial (pin 1 & 2) tty0 connected to LoRaWan remote access (insecure)
+ * Serial (pin 2 & 3) tty1 connected to Rapsberry Pi 
  * 
  */
 
@@ -88,10 +89,20 @@ static bool tty1_connected = false;
 unsigned long tty0_disconnect_time;
 unsigned long tty1_disconnect_time;
 
+bool tty0_authorized = false;
+
 #define TERMINAL_TIMEOUT 180    // seconds
 
-#define RX_BUF_SIZE 8
+#define RX_BUF_SIZE 16
 byte rxBuffer[RX_BUF_SIZE];
+
+const char password[] = "20[awarc]17";
+#define PWD_LENGTH 11
+
+#define NUL 0
+#define STX 2
+#define ETX 3
+#define EOT 4
 
 bool overrideMode=false;    // manual control of power circuits via terminal
 
@@ -178,8 +189,7 @@ void processDevices () {
           devicePwr(i+1, sOn);    // switch power on
         }
       }
-    }
-    
+    }    
   } // for loop - device
 }
 
@@ -344,6 +354,23 @@ void terminal_process_cmd(byte cmd, byte parameter) {
   terminal_menu();
 }
 
+void tty1_process_data() {
+  char txBuffer[16];
+  switch (rxBuffer[1]) {
+    case 'v':
+      sprintf(txBuffer, "%c%d.%d%c%c", STX, (int) batteryV, (int) (batteryV *100) % 100, ETX, EOT);
+      break;
+    default:
+      sprintf(txBuffer, "%c", EOT);
+      break;
+  }
+  // send txBuffer up to and including EOT
+  for (int i=0; i<15; i++) {
+    tty1.write(txBuffer[i]);
+    if (txBuffer[i] == EOT) break;
+  }
+}
+
 int terminal0_rx() {
   int i;
   // clear RX buffer
@@ -378,9 +405,17 @@ int terminal1_rx() {
   return i;
 }
 
+bool terminal_login() {
+  for (int i=0; i<PWD_LENGTH; i++) {
+    if (rxBuffer[i] != password[i]) return false;
+  }
+  return true;
+}
+
 void terminal_disconnect() {
   if (tty0_connected) {
     terminal_print("tty0 disconnected\n\r");
+    tty0_authorized = false;
     tty0_connected = false;
   }
   if (tty1_connected) {
@@ -413,7 +448,18 @@ void terminal_loop () {
   if (tty0.available()) {
     terminal0_rx();
     if (tty0_connected) {
-      terminal_process_cmd(rxBuffer[0],rxBuffer[1]);
+      // tty0 needs authorisation, it is subject to breakin attempts via RF
+      if (tty0_authorized) {
+        terminal_process_cmd(rxBuffer[0],rxBuffer[1]);
+      } else {
+        if (terminal_login()) {
+          tty0_authorized = true;
+          terminal_menu();
+        } else {
+          terminal_print(" failed.\n\r");
+          terminal_disconnect();
+        }
+      }      
     } else {  // not connected
       if ( (rxBuffer[0] == 0x0A) || (rxBuffer[0] == 0x0D) ){
         if (tty1_connected) {
@@ -421,8 +467,8 @@ void terminal_loop () {
           terminal_print("\nlogin attempt on tty0\n");
         } else {
           tty0_connected = true;
-          terminal_print("\n\rVK2RAY\n\rconnected tty0, timeout %ds\n\r", TERMINAL_TIMEOUT);
-          terminal_menu();
+          tty0_authorized = false;
+          terminal_print("\n\rVK2RAY\n\rconnected tty0, timeout %ds\n\rlogin:", TERMINAL_TIMEOUT);
         }
       }      
     }
@@ -444,6 +490,10 @@ void terminal_loop () {
           terminal_print("\n\rVK2RAY\n\rconnected tty1, timeout %ds\n\r", TERMINAL_TIMEOUT);
           terminal_menu();
         }
+      }
+      // STX is a non-human request (from Raspberry Pi "aprslog" program) for measurements
+      if (rxBuffer[0] == STX) {
+        tty1_process_data();
       }
     }
     tty1_disconnect_time = millis() + ((unsigned long) TERMINAL_TIMEOUT * (unsigned long) 1000);
