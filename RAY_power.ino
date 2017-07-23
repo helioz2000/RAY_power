@@ -22,7 +22,7 @@
  * .
  * 9  - relay fpr power circuit 1
  * 
- * Serial (pin 1 & 2) tty0 connected to LoRaWan remote access (insecure)
+ * Serial (pin 0 & 1) tty0 connected to LoRaWan remote access (insecure)
  * Serial (pin 2 & 3) tty1 connected to Rapsberry Pi 
  * 
  */
