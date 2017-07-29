@@ -31,7 +31,7 @@
 #include "debug.h"
 #include <SoftwareSerial.h>
 
-#define DEVICE_COUNT 6  // Total number of power devices
+#define DEVICE_COUNT 5  // Total number of power devices
 
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 0
@@ -56,12 +56,12 @@ typedef struct {
 } device_item;
 
 device_item pwr_device[DEVICE_COUNT] = {
-  {"Relay 1", 9, 10.5, 11.0, 180, 10, sOn, 0, 0},
-  {"Relay 2", 8, 11.5, 13.0, 300, 10, sOn, 0, 0},
-  {"Relay 3", 7, 11.5, 13.0, 300, 10, sOn, 0, 0}, 
-  {"Relay 4", 6, 11.5, 13.0, 300, 10, sOn, 0, 0},
-  {"Relay 5", 5, 11.5, 13.0, 300, 10, sOn, 0, 0},
-  {"Relay 6", 4, 11.5, 13.0, 300, 10, sOn, 0, 0}
+  {"2mt Repeater", 9, 10.5, 11.0, 180, 10, sOn, 0, 0},
+  {"70cm Repeater", 8, 11.5, 13.0, 300, 10, sOn, 0, 0},
+  {"Spare CH3", 7, 11.5, 13.0, 300, 10, sOn, 0, 0}, 
+  {"Spare CH4", 6, 11.5, 13.0, 300, 10, sOn, 0, 0},
+  {"Telemetry", 5, 11.5, 13.0, 300, 10, sOn, 0, 0}
+//  {"Relay 6", 4, 11.5, 13.0, 300, 10, sOn, 0, 0}
 };
 
 #define PWR_ON true     // Output state for device ON
@@ -80,8 +80,7 @@ SoftwareSerial tty1(T1_RX_PIN, T1_TX_PIN); // RX, TX
 
 #define ANALOG_REFERENCE_V 3.3     //Reference for Analog, Voltage at full scale
 #define ANALOG_REFERENCE_RAW (float)1023 // 10bit AD converter
-
-#define PRESCALE_A0 4.7273        //15.6V -> 3.3V
+#define ANALOG_PRESCALE_A0 4.7273        //15.6V -> 3.3V
 
 static bool tty0_connected = false;
 static bool tty1_connected = false;
@@ -198,7 +197,7 @@ void readVoltages () {
   // read raw and convert to voltage at AI pin voltage
   float pinV = (float)analogRead(A0) * scaleFactor;
   // Use pre-scale to calculate measured voltages (i.e. voltage divider)
-  batteryV = pinV * PRESCALE_A0;
+  batteryV = pinV * ANALOG_PRESCALE_A0;
 }
 
 void devicePwr(byte device, byte newPwrState) {
