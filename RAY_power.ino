@@ -56,10 +56,10 @@ typedef struct {
 } device_item;
 
 device_item pwr_device[DEVICE_COUNT] = {
-  {"2mt Repeater", 9, 10.5, 11.0, 180, 10, sOn, 0, 0},
+  {"2mt Repeater", 9, 10.5, 13.0, 180, 10, sOn, 0, 0},
   {"70cm Repeater", 8, 11.5, 13.0, 300, 10, sOn, 0, 0},
-  {"Spare CH3", 7, 11.5, 13.0, 300, 10, sOn, 0, 0}, 
-  {"Spare CH4", 6, 11.5, 13.0, 300, 10, sOn, 0, 0},
+  {"Spare CH3", 7, 15.0, 16.0, 300, 10, sOff, 0, 0}, 
+  {"Spare CH4", 6, 15.0, 16.0, 300, 10, sOff, 0, 0},
   {"Telemetry", 5, 11.5, 13.0, 300, 10, sOn, 0, 0}
 //  {"Relay 6", 4, 11.5, 13.0, 300, 10, sOn, 0, 0}
 };
