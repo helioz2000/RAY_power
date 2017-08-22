@@ -30,6 +30,7 @@
 #include "power.h"
 #include "debug.h"
 #include <SoftwareSerial.h>
+#include <EEPROM.h>
 
 #define DEVICE_COUNT 5  // Total number of power devices
 
@@ -63,6 +64,22 @@ device_item pwr_device[DEVICE_COUNT] = {
   {"Telemetry", 5, 115, 130, 300, 10, sOn, 0, 0}
 //  {"Relay 6", 4, 115, 13.0, 300, 10, sOn, 0, 0}
 };
+
+// MIN MAX for device config
+#define ON_V_MIN 105
+#define ON_V_MAX 150
+#define OFF_V_MIN 95
+#define OFF_V_MAX 135
+#define ON_DELAY_MIN 5
+#define ON_DELAY_MAX 60000
+#define OFF_DELAY_MIN 0
+#define OFF_DELAY_MAX 60000
+
+// EEPROM Storage address
+#define EEPROM_ON_V_ADDR  0         // 1 byte per device
+#define EEPROM_OFF_V_ADDR 10        // 1 byte per device
+#define EEPROM_ON_DELAY_ADDR 20     // 2 bytes per device
+#define EEPROM_OFF_DELAY_ADDR 40    // 2 bytes per device
 
 #define PWR_ON true     // Output state for device ON
 #define PWR_OFF false   // Output state for device OFF
@@ -247,6 +264,79 @@ void debug(debugLevels level, char *sFmt, ...)  // %f is not supported
   va_end(args);
   return;
 }
+
+/*
+ * Perform sanity check on device parameters
+ * return: true is OK, otherwise false
+ */
+bool parameter_check (byte onV, byte offV, uint16_t onD, uint16_t offD) {
+
+  if (onV <= offV) return false;
+  if (onV < ON_V_MIN) return false;
+  if (onV > ON_V_MAX) return false;
+
+  if (offV < OFF_V_MIN) return false;
+  if (offV > OFF_V_MAX) return false;
+
+  if (onD < ON_DELAY_MIN) return false;
+  if (onD > ON_DELAY_MAX) return false;
+
+  if (offD < OFF_DELAY_MIN) return false;
+  if (offD > OFF_DELAY_MAX) return false;
+  
+  return true;
+}
+
+bool device_para_check (byte devNum) {
+  if (devNum > DEVICE_COUNT) return false;
+  devNum--;   // zero based index for array
+
+  return parameter_check (pwr_device[devNum].onVoltage, pwr_device[devNum].offVoltage, pwr_device[devNum].onDelay, pwr_device[devNum].offDelay );
+}
+
+/*
+ * Read device parameters from EEPROM
+ * devNum = device number, 1... DEVICE_COUNT
+ */
+bool device_para_read (byte devNum) {
+  if (devNum > DEVICE_COUNT) return false;
+  devNum--;   // zero based index for array
+  byte onV, offV;
+  uint16_t onDelay, offDelay;
+  
+  onV = EEPROM.read(EEPROM_ON_V_ADDR + devNum);
+  offV = EEPROM.read(EEPROM_OFF_V_ADDR + devNum);
+  onDelay = (EEPROM.read(EEPROM_ON_DELAY_ADDR + devNum *2)) << 8;
+  onDelay += EEPROM.read(EEPROM_ON_DELAY_ADDR + devNum *2 +1);
+  offDelay = (EEPROM.read(EEPROM_OFF_DELAY_ADDR + devNum *2)) << 8;
+  offDelay += EEPROM.read(EEPROM_OFF_DELAY_ADDR + devNum *2 +1);
+
+  pwr_device[devNum].onVoltage = onV;
+  pwr_device[devNum].offVoltage = offV;
+  pwr_device[devNum].onDelay = onDelay;
+  pwr_device[devNum].offDelay = offDelay;
+  return true;
+}
+
+/*
+ * Write device parameters to EEPROM
+ * devNum = device number, 1... DEVICE_COUNT
+ */
+bool device_para_write (byte devNum) {
+  if (devNum > DEVICE_COUNT) return false;
+  // sanity check on parameter values
+  if ( !device_para_check(devNum) ) return false;
+  devNum--;   // zero based index for array
+  
+  EEPROM.write(EEPROM_ON_V_ADDR + devNum, pwr_device[devNum].onVoltage );
+  EEPROM.write(EEPROM_OFF_V_ADDR + devNum, pwr_device[devNum].offVoltage );
+  EEPROM.write(EEPROM_ON_DELAY_ADDR + devNum*2, pwr_device[devNum].onDelay >> 8);
+  EEPROM.write(EEPROM_ON_DELAY_ADDR + (devNum *2 +1), pwr_device[devNum].onDelay && 0x00FF);
+  EEPROM.write(EEPROM_OFF_DELAY_ADDR + devNum *2, pwr_device[devNum].offDelay >> 8);
+  EEPROM.write(EEPROM_OFF_DELAY_ADDR + (devNum *2 +1), pwr_device[devNum].offDelay && 0x00FF);
+  return true;
+}
+
 
 /*
  * ===============================================================
