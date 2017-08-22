@@ -59,17 +59,17 @@ typedef struct {
 device_item pwr_device[DEVICE_COUNT] = {
   {"2mt Rptr ", 9, 105, 130, 180, 10, sOn, 0, 0},
   {"70cm Rptr", 8, 115, 130, 300, 10, sOn, 0, 0},
-  {"Spare CH3", 7, 150, 160, 300, 10, sOff, 0, 0}, 
-  {"Spare CH4", 6, 150, 160, 300, 10, sOff, 0, 0},
+  {"Spare CH3", 7, 140, 160, 300, 10, sOff, 0, 0}, 
+  {"Spare CH4", 6, 140, 160, 300, 10, sOff, 0, 0},
   {"Telemetry", 5, 115, 130, 300, 10, sOn, 0, 0}
 //  {"Relay 6", 4, 115, 13.0, 300, 10, sOn, 0, 0}
 };
 
 // MIN MAX for device config
 #define ON_V_MIN 105
-#define ON_V_MAX 150
+#define ON_V_MAX 160
 #define OFF_V_MIN 95
-#define OFF_V_MAX 135
+#define OFF_V_MAX 140
 #define ON_DELAY_MIN 5
 #define ON_DELAY_MAX 60000
 #define OFF_DELAY_MIN 0
@@ -137,11 +137,14 @@ void setup() {
 
   // Start terminal interfaces
   tty0.begin(TERMINAL_BAUD);
-  tty0.println(F("Started tt0"));
+  tty0.print(F("\r\nStarted tty0\r\n"));
   tty1.begin(TERMINAL_BAUD);
-  tty1.println(F("Started tt1"));
+  tty1.print(F("\r\nStarted tty1\r\n"));
 
-  // configure pwr device outputs and switch them the pre-set state
+  // initialise device parameters
+  device_para_init();
+ 
+  // configure pwr device outputs and switch them to the pre-set startup state
   for (int i=0; i < DEVICE_COUNT; i++) {
     pinMode(pwr_device[i].pin, OUTPUT);
     devicePwr(i+1, pwr_device[i].currentState);
@@ -303,14 +306,23 @@ bool device_para_read (byte devNum) {
   devNum--;   // zero based index for array
   byte onV, offV;
   uint16_t onDelay, offDelay;
-  
+  int addr;
+
+  // read parameter values from EEPROM
   onV = EEPROM.read(EEPROM_ON_V_ADDR + devNum);
   offV = EEPROM.read(EEPROM_OFF_V_ADDR + devNum);
-  onDelay = (EEPROM.read(EEPROM_ON_DELAY_ADDR + devNum *2)) << 8;
-  onDelay += EEPROM.read(EEPROM_ON_DELAY_ADDR + devNum *2 +1);
-  offDelay = (EEPROM.read(EEPROM_OFF_DELAY_ADDR + devNum *2)) << 8;
-  offDelay += EEPROM.read(EEPROM_OFF_DELAY_ADDR + devNum *2 +1);
+  addr = EEPROM_ON_DELAY_ADDR + devNum*2;
+  onDelay = (EEPROM.read(addr) << 8);
+  onDelay += EEPROM.read(++addr);
+  addr = EEPROM_OFF_DELAY_ADDR + devNum*2;
+  offDelay = (EEPROM.read(addr) << 8);
+  offDelay += EEPROM.read(++addr);
 
+  // perform sanity check
+  if (!parameter_check(onV, offV, onDelay, offDelay)) 
+    return false;
+
+  // store parameters in device
   pwr_device[devNum].onVoltage = onV;
   pwr_device[devNum].offVoltage = offV;
   pwr_device[devNum].onDelay = onDelay;
@@ -319,10 +331,23 @@ bool device_para_read (byte devNum) {
 }
 
 /*
+ * Initialized device parameters from EEPROM data
+ */
+bool device_para_init () {
+  byte i;
+  for (i=1; i<=DEVICE_COUNT; i++) {
+    if (!device_para_read(i)) {
+      debug(L_ERROR, "\n\rDevice %d: parameters stored in EEPROM are invalid and have been ignored", i); 
+    }
+  }
+}
+
+/*
  * Write device parameters to EEPROM
  * devNum = device number, 1... DEVICE_COUNT
  */
 bool device_para_write (byte devNum) {
+  int addr;
   if (devNum > DEVICE_COUNT) return false;
   // sanity check on parameter values
   if ( !device_para_check(devNum) ) return false;
@@ -330,10 +355,12 @@ bool device_para_write (byte devNum) {
   
   EEPROM.write(EEPROM_ON_V_ADDR + devNum, pwr_device[devNum].onVoltage );
   EEPROM.write(EEPROM_OFF_V_ADDR + devNum, pwr_device[devNum].offVoltage );
-  EEPROM.write(EEPROM_ON_DELAY_ADDR + devNum*2, pwr_device[devNum].onDelay >> 8);
-  EEPROM.write(EEPROM_ON_DELAY_ADDR + (devNum *2 +1), pwr_device[devNum].onDelay && 0x00FF);
-  EEPROM.write(EEPROM_OFF_DELAY_ADDR + devNum *2, pwr_device[devNum].offDelay >> 8);
-  EEPROM.write(EEPROM_OFF_DELAY_ADDR + (devNum *2 +1), pwr_device[devNum].offDelay && 0x00FF);
+  addr = EEPROM_ON_DELAY_ADDR + devNum*2;
+  EEPROM.write(addr, pwr_device[devNum].onDelay >> 8);
+  EEPROM.write(++addr, pwr_device[devNum].onDelay & 0x00FF);
+  addr = EEPROM_OFF_DELAY_ADDR + devNum *2;
+  EEPROM.write(addr, pwr_device[devNum].offDelay >> 8);
+  EEPROM.write(++addr, pwr_device[devNum].offDelay & 0x00FF);
   return true;
 }
 
@@ -365,12 +392,24 @@ void terminal_print_state(byte device) {
 }
 
 /*
+ * print device info for all devices
+ */
+void terminal_info() {
+  terminal_print(F("\n\rDevice Settings:\n\r"));
+  terminal_print(F("Device       OnV   OnD  OffV   OffD\n\r"));
+  for (int i=0; i < DEVICE_COUNT; i++) {
+    terminal_print(F("%d: %s %3dV %4ds %3dV %4ds\r\n"), i+1, pwr_device[i].description, pwr_device[i].onVoltage, pwr_device[i].onDelay, pwr_device[i].offVoltage, pwr_device[i].offDelay);
+  }
+  terminal_print(F("\n\r"));
+}
+
+/*
  * print device status for all devices
  */
 void terminal_status() {
   terminal_print(F("\n\rDevice Status:\n\r"));
   for (int i=0; i < DEVICE_COUNT; i++) {
-    terminal_print(F("%d: %s is"), i+1, pwr_device[i].description);
+    terminal_print(F("%d: %s is "), i+1, pwr_device[i].description);
     terminal_print_state(i);
     terminal_print(F("\n\r"));
   }
@@ -402,8 +441,10 @@ void terminal_device_config_menu() {
     terminal_print(F("  fxxx  - set new OFF Voltage [Volts * 10]\n\r"));
     terminal_print(F("  txxx  - set new ON Delay [seconds]\n\r"));
     terminal_print(F("  uxxx  - set new OFF Delay [seconds]\n\r"));
+    terminal_print(F("  s     - save device parameters to EEPROM\n\r"));
+    terminal_print(F("  r     - read device parameters from EEPROM\n\r"));
   }
-  terminal_print(F("  x  - exit device configuration\n\r"));
+  terminal_print(F("  x     - exit device configuration\n\r"));
   terminal_print(F("\n\r"));
 }
 
@@ -426,6 +467,7 @@ void terminal_menu() {
     terminal_print(F("  o -  toggle override mode (manual power control)\n\r"));
   }
   terminal_print(F("  s  - status\n\r"));
+  terminal_print(F("  i  - info\n\r"));
   terminal_print(F("  v  - battery voltage\n\r"));
   terminal_print(F("  d  - device config\n\r"));
   terminal_print(F("  x  - exit (close connection)\n\r"));
@@ -458,19 +500,58 @@ void terminal_device_config() {
 
 void terminal_process_device_config_cmd(byte cmd, uint16_t parameter) {
   byte devNum;
+  bool valid_device = false;
+  
+  // check if we have a valid device selected
+  if ( (term_config_device > 0) && (term_config_device <= DEVICE_COUNT) )
+    valid_device = true;
+    
   switch(cmd) {
     case 'n':   // ON Voltage
+      if (valid_device) {
+        if (parameter_check(rx_parameter, pwr_device[term_config_device-1].offVoltage, pwr_device[term_config_device-1].onDelay, pwr_device[term_config_device-1].offDelay) )
+          pwr_device[term_config_device-1].onVoltage = rx_parameter;
+        else
+          terminal_print(F("\r\nError: Specified On Voltage is out of range, change ignored\r\n"));
+      }
+      break;
     case 'f':   // OFF Voltage
-      devNum = terminal_verify_device(parameter, true) ;
-      if (devNum)
-        devicePwr(devNum, sOff);
+      if (valid_device) {
+        if (parameter_check(pwr_device[term_config_device-1].onVoltage, rx_parameter,  pwr_device[term_config_device-1].onDelay, pwr_device[term_config_device-1].offDelay) )
+          pwr_device[term_config_device-1].offVoltage = rx_parameter;
+        else
+          terminal_print(F("\r\nError: Specified Off Voltage is out of range, change ignored\r\n"));
+      }
       break;
     case 't': // ON Delay
+      if (valid_device) {
+        if (parameter_check(pwr_device[term_config_device-1].onVoltage, pwr_device[term_config_device-1].offVoltage, rx_parameter, pwr_device[term_config_device-1].offDelay) )
+          pwr_device[term_config_device-1].onDelay = rx_parameter;
+        else
+          terminal_print(F("\r\nError: Specified On Delay is out of range, change ignored\r\n"));
+      }
       break;
     case 'u': // OFF Delay
+      if (valid_device) {
+        if (parameter_check(pwr_device[term_config_device-1].onVoltage, pwr_device[term_config_device-1].offVoltage, pwr_device[term_config_device-1].onDelay, rx_parameter) )
+          pwr_device[term_config_device-1].offDelay = rx_parameter;
+        else
+          terminal_print(F("\r\nError: Specified Off Delay is out of range, change ignored\r\n"));
+      }
       break;
-    case 'x':
+    case 's': // Save values to EEPROM
+      if (valid_device) {
+        device_para_write(term_config_device);
+      }
+      break;
+    case 'r': // Read values to EEPROM
+      if (valid_device) {
+        device_para_read(term_config_device);
+      }
+      break;
+    case 'x': // exit device config menu
       term_config_device = 0;
+      break;
     default:
       // did we select a new device number
       devNum = terminal_verify_device(cmd, true);
@@ -501,6 +582,9 @@ void terminal_process_cmd(byte cmd, uint16_t parameter) {
       break;
     case 'o':
       overrideMode = !overrideMode;
+      break;
+    case 'i':
+      terminal_info();
       break;
     case 's':
       terminal_voltage();
@@ -538,46 +622,48 @@ void tty1_process_data() {
   }
 }
 
-int terminal0_rx() {
+bool terminal_rx_parameter (char *rxbuf, byte rxlen) {
+  int i=rxlen; 
+  int m=1;
+
+  // work through string backwards starting at string end, ddo not evaluate first char (it's the command) 
+  while(--i > 0) {
+    // do we have a numeric char?
+    if ( (rxbuf[i] < '0') || (rxbuf[i] > '9') ) {
+      continue; // not numeric -> skip to next char
+    }
+    // found a numeric char
+    rx_parameter += (rxbuf[i]-'0') * m;
+  //debug(L_INFO, "\n\rEvaluating [%s] len %d, i=%d, %c - %d\r\n", rxbuf, rxlen, i, rxbuf[i], rx_parameter);  
+    m*=10;  // switch decimal multiplier to next digit   
+  }
+}
+
+int terminal_rx(byte tty) {
   int i,x,m;
   // clear RX buffer
   for (i=0; i<RX_BUF_SIZE; i++) {
     rxBuffer[i] = 0;
   }
   i = 0;
+  rx_parameter = 0;
   unsigned long timeout = millis() + 250;   // critial for terminals which send one character at a time
   while (millis() <= timeout) {
-    if (tty0.available()) {
+    if ( (tty == 0) && tty0.available() ) {
       rxBuffer[i++] = tty0.read();
     }
-  }
-  return i;
-}
-
-int terminal1_rx() {
-  // receive from uart until timeout
-  int i, x, m;
-  // clear RX buffer
-  for (i=0; i<RX_BUF_SIZE; i++) {
-    rxBuffer[i] = 0;
-  }
-  i = 0;
-  unsigned long timeout = millis() + 200;
-  while (millis() <= timeout) {
-    if (tty1.available()) {
+    if ( (tty == 1) && tty1.available() ) {
       rxBuffer[i++] = tty1.read();
-      if (i >= RX_BUF_SIZE) i--;  // prevent buffer overrun      
-    }
-    // have we receive a parameter length > 1 byte?
-    if (i > 2) {  // yes - convert to integer;
-      x=i-1; m=1; rx_parameter = rxBuffer[x]-48;
-      while(--x > 0) {
-        m*=10;
-        rx_parameter += (rxBuffer[x]-48) * m;
-      }
     }
   }
-  return i;
+  rxBuffer[i] = 0; // mark string end
+
+  // have we received more than just a one char command?
+  if (rxBuffer[1] >= ' ') {  // yes - convert parameter to integer;
+    terminal_rx_parameter(rxBuffer, i);
+    //debug(L_INFO, "\n\r!! Got parameter value <%d>\r\n", rx_parameter);
+  } 
+  return i;  
 }
 
 bool terminal_login() {
@@ -632,7 +718,7 @@ void terminal_loop () {
 
   // tty0
   if (tty0.available()) {
-    terminal0_rx();
+    terminal_rx(0);
     if (tty0_connected) {
       // tty0 needs authorisation, it is subject to breakin attempts via RF
       if (tty0_authorized) {
@@ -664,7 +750,7 @@ void terminal_loop () {
 
   // tty1
   if (tty1.available()) {
-    terminal1_rx();
+    terminal_rx(1);
     if (tty1_connected) {
       terminal_process_cmd(rxBuffer[0],rxBuffer[1]);
     } else {  // not connected
