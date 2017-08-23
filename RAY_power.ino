@@ -84,10 +84,13 @@ device_item pwr_device[DEVICE_COUNT] = {
 #define PWR_ON true     // Output state for device ON
 #define PWR_OFF false   // Output state for device OFF
 
+// Terminal definitions
 #define T1_RX_PIN 2
 #define T1_TX_PIN 3
 
-#define TERMINAL_BAUD 9600
+#define TERMINAL_BAUD 9600          // bps
+#define TERMINAL_CHAR_TIMEOUT 1000  // ms
+#define TERMINAL_TIMEOUT 180        // seconds
 
 #define debugTTY tty0
 #define tty0 Serial
@@ -105,11 +108,9 @@ uint16_t rx_parameter;         // to store a parameter > 1 byte received from tt
 unsigned long tty0_disconnect_time;
 unsigned long tty1_disconnect_time;
 
-bool tty0_authorized = true;  // !! should be false;
+bool tty0_authorized = false;  // !! should be false;
 
 static byte term_config_device = 0;   // device config mode when > 0
-
-#define TERMINAL_TIMEOUT 180    // seconds
 
 #define RX_BUF_SIZE 16
 byte rxBuffer[RX_BUF_SIZE];
@@ -421,7 +422,6 @@ void terminal_status() {
  */
 void terminal_voltage() {
   terminal_print(F("\n\r============================\n\r"));
-  //terminal_print("Battery Voltage: %d.%dV (%d)\n\r", (int) batteryV, (int) (batteryV *100) % 100, batV );  
   terminal_print(F("Battery Voltage: %d\n\r"), batV );
 }
 
@@ -647,13 +647,15 @@ int terminal_rx(byte tty) {
   }
   i = 0;
   rx_parameter = 0;
-  unsigned long timeout = millis() + 250;   // critial for terminals which send one character at a time
+  unsigned long timeout = millis() + TERMINAL_CHAR_TIMEOUT;   // critial for terminals which do not wait for CR/LF before sending
   while (millis() <= timeout) {
     if ( (tty == 0) && tty0.available() ) {
       rxBuffer[i++] = tty0.read();
+      timeout = millis() + TERMINAL_CHAR_TIMEOUT;
     }
     if ( (tty == 1) && tty1.available() ) {
       rxBuffer[i++] = tty1.read();
+      timeout = millis() + TERMINAL_CHAR_TIMEOUT;
     }
   }
   rxBuffer[i] = 0; // mark string end
@@ -739,9 +741,8 @@ void terminal_loop () {
           terminal_print(F("\nlogin attempt on tty0\n"));
         } else {
           tty0_connected = true;
-          tty0_authorized = true;   /// !! change to false
+          tty0_authorized = false;
           terminal_print(F("\n\rVK2RAY\n\rconnected tty0, timeout %ds\n\rlogin:"), TERMINAL_TIMEOUT);
-          tty0.println("connected");
         }
       }      
     }
