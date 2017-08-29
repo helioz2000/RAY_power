@@ -5,6 +5,8 @@
  *       
  *  V2.0 Serial Connection with control function added, LCD removed
  * 
+ *  Designed for Arduino Mini Pro 3.3V 8Mhz which draws minimal power
+ * 
  * Serial terminal operation:
  * ==========================
  * The serial console output is started by CR or LF from the terminal
@@ -25,6 +27,20 @@
  * Serial (pin 0 & 1) tty0 connected to LoRaWan remote access (insecure)
  * Serial (pin 2 & 3) tty1 connected to Rapsberry Pi 
  * 
+ */
+
+/*
+ * Current draw not measured by builtin current sensors:
+ * all channels off: 19mA (Adruino only)
+ * Ch1: 72-100mA (53-81mA) @ 10-15V, 85mA @ 12V
+ * Ch2: 75-106mA (56-87mA) @ 10-15V
+ * Ch3: 78-109mA (59-90mA) @ 10-15V
+ * Ch4: 77-110mA (58-91mA) @ 10-15V
+ * Ch5: 116-132mA (97-113mA) @ 10-15V (no telemetry devices connected)
+ * Note: current in brackets has 19mA (Arduino only) current subtracted
+ * 
+ * Ch1+Ch2+Ch5: 224-300mA @ 10-15V, 245mA @ 12V
+ * All channels on: 314-475mA @ 10-15V
  */
 
 #include "power.h"
