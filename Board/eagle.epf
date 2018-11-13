@@ -221,7 +221,6 @@ UsedLibrary="/Applications/EAGLE-7.7.0/lbr/micro-philips.lbr"
 UsedLibrary="/Applications/EAGLE-7.7.0/lbr/micro-renesas.lbr"
 UsedLibrary="/Applications/EAGLE-7.7.0/lbr/micro-samsung.lbr"
 UsedLibrary="/Applications/EAGLE-7.7.0/lbr/micro-siemens.lbr"
-UsedLibrary="/Applications/EAGLE-7.7.0/lbr/microbuilder.lbr"
 UsedLibrary="/Applications/EAGLE-7.7.0/lbr/microchip.lbr"
 UsedLibrary="/Applications/EAGLE-7.7.0/lbr/micron.lbr"
 UsedLibrary="/Applications/EAGLE-7.7.0/lbr/micronas.lbr"
@@ -348,16 +347,14 @@ UsedLibrary="/Applications/EAGLE-7.7.0/lbr/xilinx-xc9.lbr"
 UsedLibrary="/Applications/EAGLE-7.7.0/lbr/xilinx-xcv.lbr"
 UsedLibrary="/Applications/EAGLE-7.7.0/lbr/zetex.lbr"
 UsedLibrary="/Applications/EAGLE-7.7.0/lbr/zilog.lbr"
-UsedLibrary="/Users/eb/EagleLibrary/Arduino-clone.lbr"
-UsedLibrary="/Users/eb/EagleLibrary/SparkFun-Connectors.lbr"
 UsedLibrary="/Users/eb/EagleLibrary/adafruit.lbr"
 
 [Win_1]
 Type="Control Panel"
-Loc="61 141 660 540"
+Loc="84 129 683 528"
 State=2
 Number=0
 
 [Desktop]
-Screen="1440 900"
+Screen="1920 1080"
 Window="Win_1"
