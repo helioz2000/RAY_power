@@ -4,6 +4,8 @@
  *       LCD display (if connected) will display
  *       
  *  V2.0 Serial Connection with control function added, LCD removed
+ *  
+ *  V2.1 Added filter for voltage reading
  * 
  *  Designed for Arduino Mini Pro 3.3V 8Mhz which draws minimal power
  * 
@@ -50,8 +52,8 @@
 
 #define DEVICE_COUNT 5  // Total number of power devices
 
-#define VERSION_MAJOR 1
-#define VERSION_MINOR 0
+#define VERSION_MAJOR 2
+#define VERSION_MINOR 1
 
 enum pwrStateType {
   sOff,
@@ -73,11 +75,11 @@ typedef struct {
 } device_item;
 
 device_item pwr_device[DEVICE_COUNT] = {
-  {"2mt Rptr ", 9, 105, 130, 180, 10, sOn, 0, 0},
+  {"2mt Rptr ", 9, 115, 130, 180, 10, sOn, 0, 0},
   {"70cm Rptr", 8, 115, 130, 300, 10, sOn, 0, 0},
   {"Spare CH3", 7, 140, 160, 300, 10, sOff, 0, 0}, 
   {"Spare CH4", 6, 140, 160, 300, 10, sOff, 0, 0},
-  {"Telemetry", 5, 115, 130, 300, 10, sOn, 0, 0}
+  {"Telemetry", 5, 105, 110, 120, 10, sOn, 0, 0}
 //  {"Relay 6", 4, 115, 13.0, 300, 10, sOn, 0, 0}
 };
 
@@ -145,6 +147,12 @@ bool overrideMode=false;    // manual control of power circuits via terminal
 static byte batV;   // battery voltage as byte with implied decimal point
 static float scaleFactor = ANALOG_REFERENCE_V / ANALOG_REFERENCE_RAW;
 
+// define voltage filter
+#define FILTER_QTY 10             // number of filter values
+float filter_value[FILTER_QTY];   // filter array
+
+int loop_count = 0;
+
 debugLevels currentDebugLevel = L_INFO;
 
 void setup() {
@@ -158,6 +166,11 @@ void setup() {
   tty1.begin(TERMINAL_BAUD);
   tty1.print(F("\r\nStarted tty1\r\n"));
 
+  // clear filter array
+  for (int i = 0; i < FILTER_QTY-1; i++) {
+    filter_value[i] = 0.0;
+  }
+
   // initialise device parameters
   device_para_init();
  
@@ -169,7 +182,12 @@ void setup() {
 }
 
 void loop() {
-  readVoltages();
+  // voltage readings at intervals
+  if (loop_count <= 0) {
+    loop_count = 100;
+    readVoltages();
+  }
+  loop_count--;
   terminal_loop();
   if (!overrideMode) {
     processDevices();
@@ -255,14 +273,34 @@ void processDevices () {
 /*
  * Battery Voltage - read raw and convert to voltage at AI pin voltage
  */
-  
 void readVoltages () {
   float pinV = (float)analogRead(A0) * scaleFactor;
   // Use pre-scale to calculate measured voltages (i.e. voltage divider)
   float batteryV = pinV * ANALOG_PRESCALE_A0;
-  batV = (int)(batteryV *10);   // convert to byte with implied decimal point
+  float filterV = filterVoltage(batteryV);
+  batV = (int)(filterV *10);   // convert to byte with implied decimal point
 }
 
+/* 
+ *  Battery voltage filter - required as there is no capacitor on the voltage circuit and the 
+ *  solar charger switching causes voltage dips.
+ */
+float filterVoltage (float newValue) {
+  float filter_total;
+  int i;
+  // shift filter values
+  for (i = FILTER_QTY-1; i > 0; i--) {
+    filter_value[i] =  filter_value[i-1];
+  }
+  // add new value to filter
+  filter_value[0] = newValue;
+  // average filter values
+  filter_total = 0.0;
+  for (i = 0; i < FILTER_QTY; i++) {
+    filter_total += filter_value[i];
+  }
+  return (filter_total / (float)FILTER_QTY);
+}
 
 /*
  * ===============================================================
@@ -799,5 +837,3 @@ void terminal_loop () {
     terminal_disconnect();
   }
 }
-
-
